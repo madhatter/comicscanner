@@ -149,61 +149,74 @@
       setStatus(false, 'Stopped');
     }
 
-    function normalizeUPC(code) {
-      // 12 digits → perfect UPC-A
+    function isBookEAN(code) {
+      // Works on both the 13-digit main code and the full 18-digit combined string
+      return code.startsWith('978') || code.startsWith('979');
+    }
+
+    function normalizeMain(code) {
+      // Book EAN-13 (978/979): keep all 13 digits
+      if (isBookEAN(code)) return code;
+      // Standard UPC-A: 12 digits
       if (/^\d{12}$/.test(code)) return code;
-      // 13 digits with leading 0 → EAN-13 shell around UPC-A, strip the 0
+      // EAN-13 with leading 0 = UPC-A in disguise: strip the 0
       if (/^\d{13}$/.test(code) && code[0] === '0') return code.slice(1);
-      // 13 digits without leading 0 → take first 12 (Quagga2 sometimes appends check digit)
+      // EAN-13 without leading 0 (non-book): take first 12
       if (/^\d{13}$/.test(code)) return code.slice(0, 12);
       return null;
     }
 
     function normalizeCombined(combined) {
+      // 17 digits = UPC-A (12) + EAN-5 (5) → comics ✓
+      if (/^\d{17}$/.test(combined)) return combined;
+      // 18 digits starting with 978/979 = EAN-13 + EAN-5 → trade paperbacks ✓
+      if (/^\d{18}$/.test(combined) && (combined.startsWith('978') || combined.startsWith('979'))) return combined;
+      // 18 digits with leading 0 = UPC-A misread as EAN-13 → strip leading 0 → 17
       if (/^\d{18}$/.test(combined) && combined[0] === '0') return combined.slice(1);
       return combined;
+    }
+
+    function isValidCombined(code) {
+      return /^\d{17}$/.test(code) || /^\d{18}$/.test(code);
     }
 
     function handleDetected(result) {
       const cr  = result.codeResult;
       const raw = cr.code;
       if (!raw) return;
-      const now = Date.now();
 
-      // ── Path 1: Quagga2 already decoded both parts in one frame ──────────
-      // When cr.supplement is set, cr.code already contains the FULL combined
-      // string (UPC-A + EAN-5 concatenated), possibly with a leading 0.
+      // ── Path 1: supplement present — raw already contains the full combined string ──
       if (cr.supplement && cr.supplement.code) {
         const combined = normalizeCombined(raw);
-        if (/^\d{17}$/.test(combined)) {
-          pending.upc = null;
-          commitCode(combined, 'UPC-A+5 (direct)');
+        if (isValidCombined(combined)) {
+          commitCode(combined, isBookEAN(combined) ? 'EAN-13+5' : 'UPC-A+5');
           return;
         }
-        // Still wrong length — show for debugging
-        showPartial(combined, `Length ${combined.length} ≠ 17 — raw was ${raw.length} digits`);
+        // Not valid yet — show debug
+        showPartial(combined, `Length ${combined.length} — raw was ${raw.length} digits`);
         return;
       }
 
-      // ── Path 2: Manual merge across frames ───────────────────────────────
-      // Quagga sometimes returns UPC-A first, supplement in a later frame.
-      const upc = normalizeUPC(raw);
-      if (upc) {
-        pending.upc = upc;
+      // ── Path 2: no supplement yet — buffer the main code and wait ──
+      // (fallback for frames where Quagga finds UPC/EAN without supplement)
+      const now = Date.now();
+      const main = normalizeMain(raw);
+      if (main) {
+        pending.upc = main;
         pending.ts  = now;
-        showPartial(upc, 'UPC-A ✓ — waiting for EAN-5 supplement …');
+        showPartial(main, `${/^\d{13}$/.test(main) ? 'EAN-13' : 'UPC-A'} ✓ — waiting for EAN-5 supplement …`);
         return;
       }
 
       if (/^\d{5}$/.test(raw)) {
         if (pending.upc && (now - pending.ts) < MERGE_MS) {
           const combined = normalizeCombined(pending.upc + raw);
-          if (/^\d{17}$/.test(combined)) {
-            commitCode(combined, 'UPC-A + EAN-5 (two frames)');
+          if (isValidCombined(combined)) {
+            commitCode(combined, isBookEAN(combined) ? 'EAN-13 + EAN-5 (two frames)' : 'UPC-A + EAN-5 (two frames)');
             pending.upc = null;
           }
         } else {
-          showPartial(raw, 'EAN-5 ✓ — waiting for UPC-A …');
+          showPartial(raw, 'EAN-5 ✓ — waiting for main code …');
         }
         return;
       }
@@ -240,7 +253,13 @@
 
     // Split 17 digits into groups for readability: 1-5-5-6
     function formatCode(code) {
-      return code.replace(/^(\d{1})(\d{5})(\d{5})(\d{6})$/, '$1 $2 $3 $4');
+      // UPC-A+5 (17): 1-5-5-6  e.g. 7 61941 38622 501711 → wait, 7+5+5+5=17 ✓
+      if (/^\d{17}$/.test(code))
+        return code.replace(/^(\d{1})(\d{5})(\d{5})(\d{1})(\d{5})$/, '$1 $2 $3 $4 $5');
+      // EAN-13+5 (18): 3-5-5-5  e.g. 978 17995 06904 50999
+      if (/^\d{18}$/.test(code))
+        return code.replace(/^(\d{3})(\d{5})(\d{5})(\d{5})$/, '$1 $2 $3 $4');
+      return code;
     }
 
     function renderHistory() {
