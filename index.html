@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Comic Barcode Scanner</title>
+  <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <h1>Comic Scanner</h1>
+    <p>17-Digit Barcode · EAN / UPC</p>
+  </header>
+
+  <div class="scanner-card">
+    <div class="scanner-viewport">
+      <div id="interactive" class="viewport"></div>
+      <div class="finder">
+        <div class="finder-box">
+          <div class="scan-line"></div>
+        </div>
+      </div>
+      <div class="viewport-label">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Ready</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="primary" id="startBtn" onclick="startScanner()">▶ Start</button>
+      <button id="stopBtn" onclick="stopScanner()" disabled>■ Stop</button>
+    </div>
+
+    <div class="result-panel">
+      <div class="result-label">Last Scan</div>
+      <div class="result-value" id="resultValue">—</div>
+      <div class="result-meta" id="resultMeta"></div>
+    </div>
+  </div>
+
+  <div class="history-section">
+    <div class="history-header">
+      <h2>History</h2>
+      <button class="clear-btn" onclick="clearHistory()">Clear</button>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="empty-state">No scans yet.</div>
+    </div>
+  </div>
+
+  <script>
+    let isRunning = false;
+    const history = [];
+
+    const resultValue = document.getElementById('resultValue');
+    const resultMeta  = document.getElementById('resultMeta');
+    const statusDot   = document.getElementById('statusDot');
+    const statusText  = document.getElementById('statusText');
+    const startBtn    = document.getElementById('startBtn');
+    const stopBtn     = document.getElementById('stopBtn');
+    const historyList = document.getElementById('historyList');
+    const finderBox   = document.querySelector('.finder-box');
+    const scanLine    = document.querySelector('.scan-line');
+    const viewport    = document.querySelector('.scanner-viewport');
+
+    function setStatus(active, text) {
+      statusDot.className = 'status-dot' + (active ? ' active' : '');
+      statusText.textContent = text;
+    }
+
+    // ── Merge buffer: UPC-A (12) + EAN-5 (5) = 17 digits ──────────────────
+    // Comic barcodes are UPC-A Supplemental 5. The supplement is physically
+    // shorter and positioned to the right, with digits printed ABOVE the bars
+    // (vs. below on the main code). Quagga2's supplement reader reads both in
+    // one pass and returns the result via codeResult.supplement.
+    // ────────────────────────────────────────────────────────────────────────
+    const pending = { upc: null, ts: 0 };
+    const MERGE_MS = 1500;
+
+    function startScanner() {
+      if (isRunning) return;
+      isRunning = true;
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+      setStatus(true, 'Starting camera …');
+      viewport.classList.add('scanning');
+
+      Quagga.init({
+        inputStream: {
+          name: 'Live',
+          type: 'LiveStream',
+          target: document.querySelector('#interactive'),
+          constraints: {
+            facingMode: 'environment',
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          // Wide, shallow scan strip — both barcodes must fit side-by-side
+          area: { top: '30%', bottom: '30%', left: '1%', right: '1%' },
+        },
+        decoder: {
+          readers: [
+            // With supplement: Quagga2 returns codeResult.supplement when found.
+            // If supplement is absent in frame, this reader returns nothing —
+            // so we ALSO need the plain reader below as fallback.
+            { format: 'upc_reader',  config: { supplements: ['ean_5_reader', 'ean_2_reader'] } },
+            { format: 'ean_reader',  config: { supplements: ['ean_5_reader', 'ean_2_reader'] } },
+            // Plain fallback (stores UPC-A so we can merge with a later EAN-5)
+            'upc_reader',
+            'ean_reader',
+          ],
+          multiple: false,
+        },
+        locator: {
+          // 'medium' balances speed vs. accuracy; use 'large' if phone is close
+          patchSize: 'medium',
+          halfSample: false,   // false = full resolution → better supplement detection
+        },
+        locate:       true,
+        numOfWorkers: navigator.hardwareConcurrency ? Math.min(navigator.hardwareConcurrency, 4) : 2,
+        frequency:    15,
+      }, (err) => {
+        if (err) {
+          isRunning = false;
+          startBtn.disabled = false;
+          stopBtn.disabled  = true;
+          viewport.classList.remove('scanning');
+          setStatus(false, 'Error');
+          showResult(null, 'Camera error: ' + err.message);
+          return;
+        }
+        Quagga.start();
+        setStatus(true, 'Scanning …');
+      });
+
+      Quagga.onDetected(handleDetected);
+    }
+
+    function stopScanner() {
+      if (!isRunning) return;
+      Quagga.offDetected(handleDetected);
+      Quagga.stop();
+      isRunning = false;
+      startBtn.disabled = false;
+      stopBtn.disabled  = true;
+      viewport.classList.remove('scanning');
+      setStatus(false, 'Stopped');
+    }
+
+    function normalizeUPC(code) {
+      // 12 digits → perfect UPC-A
+      if (/^\d{12}$/.test(code)) return code;
+      // 13 digits with leading 0 → EAN-13 shell around UPC-A, strip the 0
+      if (/^\d{13}$/.test(code) && code[0] === '0') return code.slice(1);
+      // 13 digits without leading 0 → take first 12 (Quagga2 sometimes appends check digit)
+      if (/^\d{13}$/.test(code)) return code.slice(0, 12);
+      return null;
+    }
+
+    function normalizeCombined(combined) {
+      if (/^\d{18}$/.test(combined) && combined[0] === '0') return combined.slice(1);
+      return combined;
+    }
+
+    function handleDetected(result) {
+      const cr  = result.codeResult;
+      const raw = cr.code;
+      if (!raw) return;
+      const now = Date.now();
+
+      // ── Path 1: Quagga2 already decoded both parts in one frame ──────────
+      // When cr.supplement is set, cr.code already contains the FULL combined
+      // string (UPC-A + EAN-5 concatenated), possibly with a leading 0.
+      if (cr.supplement && cr.supplement.code) {
+        const combined = normalizeCombined(raw);
+        if (/^\d{17}$/.test(combined)) {
+          pending.upc = null;
+          commitCode(combined, 'UPC-A+5 (direct)');
+          return;
+        }
+        // Still wrong length — show for debugging
+        showPartial(combined, `Length ${combined.length} ≠ 17 — raw was ${raw.length} digits`);
+        return;
+      }
+
+      // ── Path 2: Manual merge across frames ───────────────────────────────
+      // Quagga sometimes returns UPC-A first, supplement in a later frame.
+      const upc = normalizeUPC(raw);
+      if (upc) {
+        pending.upc = upc;
+        pending.ts  = now;
+        showPartial(upc, 'UPC-A ✓ — waiting for EAN-5 supplement …');
+        return;
+      }
+
+      if (/^\d{5}$/.test(raw)) {
+        if (pending.upc && (now - pending.ts) < MERGE_MS) {
+          const combined = normalizeCombined(pending.upc + raw);
+          if (/^\d{17}$/.test(combined)) {
+            commitCode(combined, 'UPC-A + EAN-5 (two frames)');
+            pending.upc = null;
+          }
+        } else {
+          showPartial(raw, 'EAN-5 ✓ — waiting for UPC-A …');
+        }
+        return;
+      }
+
+      // Stray reads — show debug info
+      showPartial(raw, `[${cr.format}] ${raw.length} digits — no match`);
+    }
+
+    function commitCode(code, meta) {
+      if (history.length > 0 && history[0].code === code) return;
+      history.unshift({ code, time: new Date() });
+      if (history.length > 50) history.pop();
+      showResult(code, meta);
+      renderHistory();
+    }
+
+    function showPartial(code, msg) {
+      resultValue.textContent = code;
+      resultValue.className   = 'result-value';
+      resultMeta.textContent  = msg;
+    }
+
+    function showResult(code, meta) {
+      if (code) {
+        resultValue.textContent = formatCode(code);
+        resultValue.className   = 'result-value success';
+        resultMeta.textContent  = meta ? `Format: ${meta}` : '';
+      } else {
+        resultValue.textContent = meta || '—';
+        resultValue.className   = 'result-value error';
+        resultMeta.textContent  = '';
+      }
+    }
+
+    // Split 17 digits into groups for readability: 1-5-5-6
+    function formatCode(code) {
+      return code.replace(/^(\d{1})(\d{5})(\d{5})(\d{6})$/, '$1 $2 $3 $4');
+    }
+
+    function renderHistory() {
+      if (history.length === 0) {
+        historyList.innerHTML = '<div class="empty-state">No scans yet.</div>';
+        return;
+      }
+      historyList.innerHTML = history.map((e, i) => `
+        <div class="history-item">
+          <span class="history-code">${formatCode(e.code)}</span>
+          <span class="history-time">${formatTime(e.time)}</span>
+          <span class="copy-icon" title="Copy" onclick="copyCode('${e.code}', this)">⎘</span>
+        </div>
+      `).join('');
+    }
+
+    function formatTime(d) {
+      return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function copyCode(code, el) {
+      navigator.clipboard.writeText(code).then(() => {
+        const orig = el.textContent;
+        el.textContent = '✓';
+        el.style.color = 'var(--accent)';
+        setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 1200);
+      });
+    }
+
+    function clearHistory() {
+      history.length = 0;
+      renderHistory();
+      resultValue.textContent = '—';
+      resultValue.className   = 'result-value';
+      resultMeta.textContent  = '';
+    }
+  </script>
+</body>
+</html>
