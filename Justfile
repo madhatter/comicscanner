@@ -90,15 +90,6 @@ run:
     fi
     go run .
 
-# Run with live reload (requires: go install github.com/air-verse/air@latest)
-dev:
-    #!/usr/bin/env bash
-    if ! command -v air &> /dev/null; then
-        echo "Installing air for live reload..."
-        go install github.com/air-verse/air@latest
-    fi
-    air
-
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
 # Remove generated certificates
