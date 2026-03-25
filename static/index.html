@@ -231,6 +231,13 @@
       if (history.length > 50) history.pop();
       showResult(code, meta);
       renderHistory();
+
+      // POST to the Go server
+      fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode: code }),
+      }).catch(err => console.warn('[scanner] Failed to post barcode:', err));
     }
 
     function showPartial(code, msg) {
