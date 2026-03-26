@@ -79,7 +79,7 @@ setup: setup-ca gen-cert ca-path
 
 # Build the server binary
 build:
-    go build -o comic-scanner .
+    go build -o comic-scanner ./cmd/
 
 # Run the server (generates cert first if missing)
 run:
@@ -88,7 +88,7 @@ run:
         echo "No certificate found — running gen-cert first..."
         just gen-cert
     fi
-    go run .
+    go run ./cmd/
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
