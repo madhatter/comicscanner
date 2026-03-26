@@ -88,7 +88,7 @@ func (r Result) SKU() string {
 //   - digit 4:    cover variant
 //   - digit 5:    printing number
 func (r Result) Supplement() string {
-	if len(r.Barcode) < 5 {
+	if len(r.Barcode) < 5 || r.Type() == BarcodeTypeUnknown {
 		return ""
 	}
 	return r.Barcode[len(r.Barcode)-5:]
