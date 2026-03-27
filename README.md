@@ -1,4 +1,7 @@
-# comicscanner
+# ComicScanner
+
+![Build Status](https://github.com/madhatter/comicbookcollector/actions/workflows/cicd.yml/badge.svg)
+![Go Version](https://img.shields.io/github/go-mod/go-version/madhatter/comicbookcollector)
 
 A local HTTPS server for scanning comic book barcodes via a mobile browser.
 Point your phone camera at a comic's barcode — the app decodes it into a
@@ -6,6 +9,11 @@ standardized 17 or 18 digit string and returns it to your application.
 
 This package does one thing: scan barcodes and produce the result.
 What you do with the result (API lookups, database writes, etc.) is up to you.
+
+## Screenshot
+
+<p align="center"><img src="assets/screenshot.png" width="350"><br>
+Example screenshot (Pixel 8 Pro on Chrome for Android).</p>
 
 ## Barcode format
 
@@ -21,11 +29,12 @@ and printing number (5).
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.26+
 - [mkcert](https://github.com/FiloSottile/mkcert) for local TLS certificates
 - [just](https://github.com/casey/just) (optional, for the provided task runner)
 
-HTTPS is required because browsers only grant camera access on secure origins.
+**HTTPS is required because browsers only grant camera access on secure
+origins**.
 
 ## Setup
 
@@ -43,6 +52,9 @@ go run ./cmd/
 ```
 
 Open `https://<YOUR_LOCAL_IP>:8080/scanner` on your phone.
+
+Once running, a QR code is printed to the terminal — scan it with your phone to
+open the scanner directly.
 
 ### Trusting the certificate on your phone
 
