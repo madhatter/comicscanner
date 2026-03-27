@@ -10,6 +10,11 @@ standardized 17 or 18 digit string and returns it to your application.
 This package does one thing: scan barcodes and produce the result.
 What you do with the result (API lookups, database writes, etc.) is up to you.
 
+## Screenshot
+
+<p align="center"><img src="assets/screenshot.png" width="350"><br>
+Example screenshot (Pixel 8 Pro on Chrome for Android).</p>
+
 ## Barcode format
 
 Comics use two barcodes printed together:
